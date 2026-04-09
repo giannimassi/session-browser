@@ -147,8 +147,12 @@
     const hash = location.hash || '#/';
     const f = { ...defaults };
 
+    // Subagent route: #/session/{id}/subagent/{agentId}
+    const subagentMatch = hash.match(/^#\/session\/([^/]+)\/subagent\/(.+)$/);
+    if (subagentMatch) return { __route: 'subagent', id: subagentMatch[1], agentId: subagentMatch[2] };
+
     // Detail route
-    const detailMatch = hash.match(/^#\/session\/(.+)$/);
+    const detailMatch = hash.match(/^#\/session\/([^/]+)$/);
     if (detailMatch) return { __route: 'detail', id: detailMatch[1] };
 
     // List route
@@ -506,10 +510,337 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Rendering — Detail View (stub)
+  // Rendering — Detail View
   // ---------------------------------------------------------------------------
 
-  function renderDetail(sessionId) {
+  // Configure marked to use highlight.js for code blocks
+  marked.setOptions({
+    highlight: function (code, lang) {
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(code, { language: lang }).value;
+      }
+      return hljs.highlightAuto(code).value;
+    },
+  });
+
+  /** Ensure a value is an object/array — handles JSON-string fields from the API */
+  function ensureObj(val) {
+    if (val == null) return null;
+    if (typeof val === 'string') return safeParse(val);
+    return val;
+  }
+
+  /** Format a timestamp as "HH:MM:SS" */
+  function formatTimestamp(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    return (
+      String(d.getHours()).padStart(2, '0') +
+      ':' +
+      String(d.getMinutes()).padStart(2, '0') +
+      ':' +
+      String(d.getSeconds()).padStart(2, '0')
+    );
+  }
+
+  /** Format full date + time for the detail header */
+  function formatFullDate(isoStr) {
+    if (!isoStr) return '--';
+    const d = new Date(isoStr);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const time =
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} at ${time}`;
+  }
+
+  /** Build the tool summary string, e.g. "42 turns · 15 Bash · 8 Read" */
+  function buildToolSummary(session) {
+    const parts = [];
+    if (session.turn_count != null) parts.push(`${session.turn_count} turns`);
+    const toolCounts = ensureObj(session.tool_counts);
+    if (toolCounts) {
+      for (const [name, count] of Object.entries(toolCounts)) {
+        parts.push(`${count} ${name}`);
+      }
+    }
+    return parts.join(' \u00B7 ');
+  }
+
+  /** Get a one-character icon/prefix for a tool call */
+  function toolIcon(toolName) {
+    switch (toolName) {
+      case 'Bash':
+        return '$';
+      case 'Read':
+      case 'Write':
+      case 'Edit':
+        return '\uD83D\uDCC4'; // page emoji
+      case 'Agent':
+      case 'Task':
+        return '\uD83E\uDD16'; // robot emoji
+      case 'Grep':
+      case 'Glob':
+        return '\uD83D\uDD0D'; // magnifying glass
+      default:
+        return '\u2699'; // gear
+    }
+  }
+
+  /** Render a single tool-call block (collapsed by default) */
+  function renderToolCall(block, sessionId) {
+    const wrapper = ce('div', { className: 'tool-call' });
+    const isError = block.result && block.result.is_error;
+
+    // Summary line (always visible)
+    const summary = ce('div', { className: 'tool-call-summary' });
+    const icon = ce('span', { className: 'tool-icon', textContent: toolIcon(block.name) });
+    summary.appendChild(icon);
+
+    const summaryText = block.summary || `${block.name}`;
+    summary.appendChild(ce('span', { className: 'tool-summary-text mono', textContent: summaryText }));
+
+    if (isError) {
+      summary.appendChild(ce('span', { className: 'tool-error-badge', textContent: 'ERROR' }));
+    }
+
+    // Chevron
+    const chevron = ce('span', { className: 'tool-chevron', textContent: '\u25B6' });
+    summary.appendChild(chevron);
+
+    // Detail (hidden by default)
+    const detail = ce('div', { className: 'tool-call-detail hidden' });
+
+    // Input
+    if (block.input) {
+      detail.appendChild(ce('div', { className: 'tool-detail-label', textContent: 'Input' }));
+      const inputContent =
+        typeof block.input === 'string' ? block.input : JSON.stringify(block.input, null, 2);
+      const inputPre = ce('pre', { className: 'tool-input mono' });
+      inputPre.appendChild(ce('code', { textContent: inputContent }));
+      detail.appendChild(inputPre);
+    }
+
+    // Result
+    if (block.result) {
+      detail.appendChild(ce('div', { className: 'tool-detail-label', textContent: 'Result' }));
+      const resultText = block.result.text || '';
+      const resultDiv = ce('div', {
+        className: 'tool-result' + (isError ? ' error' : ''),
+      });
+
+      const sizeBytes = block.result.size_bytes || resultText.length;
+      const lines = resultText.split('\n');
+
+      if (sizeBytes < 2000 || lines.length <= 50) {
+        const pre = ce('pre', { className: 'tool-result-content mono' });
+        pre.appendChild(ce('code', { textContent: resultText }));
+        resultDiv.appendChild(pre);
+      } else {
+        // Show first 50 lines with "Show more"
+        const truncated = lines.slice(0, 50).join('\n');
+        const pre = ce('pre', { className: 'tool-result-content mono' });
+        pre.appendChild(ce('code', { textContent: truncated }));
+        resultDiv.appendChild(pre);
+
+        const showMore = ce('button', {
+          className: 'show-more-btn',
+          textContent: `Show all ${lines.length} lines`,
+          onClick: () => {
+            pre.textContent = '';
+            pre.appendChild(ce('code', { textContent: resultText }));
+            showMore.remove();
+          },
+        });
+        resultDiv.appendChild(showMore);
+      }
+      detail.appendChild(resultDiv);
+    }
+
+    // Subagent link
+    if (block.subagent_id && sessionId) {
+      const link = ce('a', {
+        className: 'subagent-link',
+        href: `#/session/${sessionId}/subagent/${block.subagent_id}`,
+        textContent: 'View subagent transcript \u2192',
+      });
+      detail.appendChild(link);
+    }
+
+    // Toggle
+    summary.addEventListener('click', () => {
+      const isOpen = !detail.classList.contains('hidden');
+      detail.classList.toggle('hidden');
+      chevron.textContent = isOpen ? '\u25B6' : '\u25BC';
+      wrapper.classList.toggle('open', !isOpen);
+    });
+
+    wrapper.appendChild(summary);
+    wrapper.appendChild(detail);
+    return wrapper;
+  }
+
+  /** Render a thinking block (collapsed by default) */
+  function renderThinkingBlock(block) {
+    const wrapper = ce('div', { className: 'thinking-block' });
+    const toggle = ce('div', {
+      className: 'thinking-toggle',
+      innerHTML: '<span class="thinking-icon">\uD83D\uDCAD</span> <em>Thinking...</em>',
+    });
+
+    const content = ce('div', {
+      className: 'thinking-content hidden',
+      innerHTML: marked.parse(block.text || ''),
+    });
+
+    toggle.addEventListener('click', () => {
+      content.classList.toggle('hidden');
+      wrapper.classList.toggle('open');
+    });
+
+    wrapper.appendChild(toggle);
+    wrapper.appendChild(content);
+    return wrapper;
+  }
+
+  /** Render a single assistant message (contains multiple blocks) */
+  function renderAssistantMessage(msg, sessionId) {
+    const wrapper = ce('div', { className: 'message assistant' });
+
+    // Timestamp
+    if (msg.timestamp) {
+      wrapper.appendChild(
+        ce('div', { className: 'msg-timestamp', textContent: formatTimestamp(msg.timestamp) })
+      );
+    }
+
+    const blocks = msg.blocks || [];
+    for (const block of blocks) {
+      switch (block.type) {
+        case 'text':
+          wrapper.appendChild(
+            ce('div', { className: 'msg-text', innerHTML: marked.parse(block.text || '') })
+          );
+          break;
+        case 'thinking':
+          wrapper.appendChild(renderThinkingBlock(block));
+          break;
+        case 'tool_use':
+          wrapper.appendChild(renderToolCall(block, sessionId));
+          break;
+        default:
+          // Unknown block type — render as text if possible
+          if (block.text) {
+            wrapper.appendChild(
+              ce('div', { className: 'msg-text', innerHTML: marked.parse(block.text) })
+            );
+          }
+          break;
+      }
+    }
+
+    return wrapper;
+  }
+
+  /** Render a user message */
+  function renderUserMessage(msg) {
+    const wrapper = ce('div', { className: 'message user' });
+    if (msg.timestamp) {
+      wrapper.appendChild(
+        ce('div', { className: 'msg-timestamp', textContent: formatTimestamp(msg.timestamp) })
+      );
+    }
+    wrapper.appendChild(
+      ce('div', { className: 'msg-text', innerHTML: marked.parse(msg.content || '') })
+    );
+    return wrapper;
+  }
+
+  /** Render the conversation list */
+  function renderConversation(conversation, sessionId) {
+    const container = ce('div', { className: 'conversation' });
+    if (!conversation || conversation.length === 0) {
+      container.appendChild(
+        ce('div', { className: 'empty-conversation', textContent: 'No conversation data available.' })
+      );
+      return container;
+    }
+
+    for (const msg of conversation) {
+      if (msg.type === 'user') {
+        container.appendChild(renderUserMessage(msg));
+      } else if (msg.type === 'assistant') {
+        container.appendChild(renderAssistantMessage(msg, sessionId));
+      }
+    }
+
+    return container;
+  }
+
+  /** Build the detail header metadata bar */
+  function renderDetailHeader(session) {
+    const header = ce('div', { className: 'detail-header' });
+
+    // Date
+    header.appendChild(
+      ce('div', { className: 'detail-meta-item' }, [
+        ce('span', { className: 'meta-label', textContent: 'Date' }),
+        ce('span', { className: 'meta-value', textContent: formatFullDate(session.start_time) }),
+      ])
+    );
+
+    // Duration
+    header.appendChild(
+      ce('div', { className: 'detail-meta-item' }, [
+        ce('span', { className: 'meta-label', textContent: 'Duration' }),
+        ce('span', { className: 'meta-value', textContent: formatDuration(session.duration_seconds) }),
+      ])
+    );
+
+    // Project
+    if (session.project_name) {
+      header.appendChild(
+        ce('div', { className: 'detail-meta-item' }, [
+          ce('span', { className: 'meta-label', textContent: 'Project' }),
+          ce('span', { className: 'meta-value', textContent: session.project_name }),
+        ])
+      );
+    }
+
+    // Branch
+    if (session.git_branch) {
+      header.appendChild(
+        ce('div', { className: 'detail-meta-item' }, [
+          ce('span', { className: 'meta-label', textContent: 'Branch' }),
+          ce('span', { className: 'meta-value mono', textContent: session.git_branch }),
+        ])
+      );
+    }
+
+    // Cost
+    header.appendChild(
+      ce('div', { className: 'detail-meta-item' }, [
+        ce('span', { className: 'meta-label', textContent: 'Cost' }),
+        ce('span', { className: 'meta-value', textContent: formatCost(session.estimated_cost_usd) }),
+      ])
+    );
+
+    // Tool summary
+    const toolStr = buildToolSummary(session);
+    if (toolStr) {
+      header.appendChild(
+        ce('div', { className: 'detail-meta-item detail-meta-tools' }, [
+          ce('span', { className: 'meta-label', textContent: 'Activity' }),
+          ce('span', { className: 'meta-value', textContent: toolStr }),
+        ])
+      );
+    }
+
+    return header;
+  }
+
+  /** Main detail view — fetches session data and renders */
+  async function renderDetail(sessionId) {
     const content = qs('#content');
     content.innerHTML = '';
 
@@ -521,8 +852,145 @@
         textContent: '\u2190 Back to sessions',
       })
     );
-    wrapper.appendChild(ce('p', { className: 'loading-msg', textContent: `Loading session ${sessionId}...` }));
+    wrapper.appendChild(ce('p', { className: 'loading-msg', textContent: 'Loading session...' }));
     content.appendChild(wrapper);
+
+    try {
+      const resp = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+      const data = await resp.json();
+
+      wrapper.innerHTML = '';
+
+      // Back link
+      wrapper.appendChild(
+        ce('a', {
+          href: '#/',
+          className: 'back-link',
+          textContent: '\u2190 Back to sessions',
+        })
+      );
+
+      // Header metadata
+      if (data.session) {
+        wrapper.appendChild(renderDetailHeader(data.session));
+      }
+
+      // Conversation
+      wrapper.appendChild(renderConversation(data.conversation, sessionId));
+
+      // Jump to bottom FAB
+      const fab = ce('button', {
+        className: 'jump-bottom-fab',
+        textContent: '\u2193 Bottom',
+        onClick: () => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }),
+      });
+      wrapper.appendChild(fab);
+
+      // Show/hide FAB based on scroll position
+      const handleScroll = () => {
+        const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 200;
+        fab.classList.toggle('hidden', nearBottom);
+      };
+      window.addEventListener('scroll', handleScroll);
+      handleScroll();
+
+      // Scroll to top on load
+      window.scrollTo(0, 0);
+    } catch (err) {
+      console.error('Failed to load session detail:', err);
+      wrapper.innerHTML = '';
+      wrapper.appendChild(
+        ce('a', { href: '#/', className: 'back-link', textContent: '\u2190 Back to sessions' })
+      );
+      wrapper.appendChild(
+        ce('div', {
+          className: 'error-state',
+          textContent: `Failed to load session: ${err.message}`,
+        })
+      );
+    }
+  }
+
+  /** Subagent detail view */
+  async function renderSubagent(sessionId, agentId) {
+    const content = qs('#content');
+    content.innerHTML = '';
+
+    const wrapper = ce('div', { className: 'detail-view' });
+
+    // Breadcrumb
+    const breadcrumb = ce('div', { className: 'breadcrumb' });
+    breadcrumb.appendChild(
+      ce('a', { href: `#/session/${sessionId}`, className: 'back-link', textContent: 'Session' })
+    );
+    breadcrumb.appendChild(ce('span', { className: 'breadcrumb-sep', textContent: ' \u2192 ' }));
+    breadcrumb.appendChild(ce('span', { className: 'breadcrumb-current', textContent: 'Subagent' }));
+    wrapper.appendChild(breadcrumb);
+
+    wrapper.appendChild(ce('p', { className: 'loading-msg', textContent: 'Loading subagent...' }));
+    content.appendChild(wrapper);
+
+    try {
+      const resp = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(agentId)}`
+      );
+      if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+      const data = await resp.json();
+
+      // Clear loading state but keep breadcrumb
+      wrapper.innerHTML = '';
+
+      // Breadcrumb (rebuild)
+      const bc2 = ce('div', { className: 'breadcrumb' });
+      bc2.appendChild(
+        ce('a', { href: `#/session/${sessionId}`, className: 'back-link', textContent: 'Session' })
+      );
+      bc2.appendChild(ce('span', { className: 'breadcrumb-sep', textContent: ' \u2192 ' }));
+
+      const subLabel =
+        data.meta && data.meta.description
+          ? `Subagent: ${data.meta.description}`
+          : `Subagent: ${agentId}`;
+      bc2.appendChild(ce('span', { className: 'breadcrumb-current', textContent: subLabel }));
+      wrapper.appendChild(bc2);
+
+      // Subagent meta header
+      if (data.meta) {
+        const metaHeader = ce('div', { className: 'subagent-meta-header' });
+        if (data.meta.agentType) {
+          metaHeader.appendChild(
+            ce('span', { className: 'subagent-type-badge', textContent: data.meta.agentType })
+          );
+        }
+        if (data.meta.description) {
+          metaHeader.appendChild(
+            ce('span', { className: 'subagent-description', textContent: data.meta.description })
+          );
+        }
+        wrapper.appendChild(metaHeader);
+      }
+
+      // Conversation
+      wrapper.appendChild(renderConversation(data.conversation, sessionId));
+
+      // Scroll to top
+      window.scrollTo(0, 0);
+    } catch (err) {
+      console.error('Failed to load subagent:', err);
+      wrapper.innerHTML = '';
+      const bc3 = ce('div', { className: 'breadcrumb' });
+      bc3.appendChild(
+        ce('a', { href: `#/session/${sessionId}`, className: 'back-link', textContent: 'Session' })
+      );
+      wrapper.appendChild(bc3);
+      wrapper.appendChild(
+        ce('div', {
+          className: 'error-state',
+          textContent: `Failed to load subagent: ${err.message}`,
+        })
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -531,6 +999,10 @@
 
   function route() {
     const parsed = hashToFilters();
+    if (parsed.__route === 'subagent') {
+      renderSubagent(parsed.id, parsed.agentId);
+      return;
+    }
     if (parsed.__route === 'detail') {
       renderDetail(parsed.id);
       return;
