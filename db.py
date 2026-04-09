@@ -202,7 +202,9 @@ def search_sessions(
 
     if q:
         # FTS path: join sessions with sessions_fts via rowid.
-        fts_params = [q] + params
+        # Quote each search term so hyphens etc. are treated as literals.
+        fts_query = " ".join(f'"{t}"' for t in q.split() if t)
+        fts_params = [fts_query] + params
         fts_where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
         if sort_col == "relevance":
@@ -230,7 +232,7 @@ def search_sessions(
             WHERE fts.sessions_fts MATCH ?
             {"AND " + " AND ".join(where_clauses) if where_clauses else ""}
         """
-        count_params = [q] + params
+        count_params = [fts_query] + params
 
         rows_sql = f"""
             SELECT s.*
@@ -241,7 +243,7 @@ def search_sessions(
             ORDER BY {order_expr}
             LIMIT ? OFFSET ?
         """
-        rows_params = [q] + params + [limit, offset]
+        rows_params = [fts_query] + params + [limit, offset]
 
     else:
         # Plain path: query sessions table directly.

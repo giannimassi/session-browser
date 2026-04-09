@@ -119,18 +119,25 @@ def _extract_text_from_content(content) -> str:
     return "\n".join(parts)
 
 
-def _is_system_reminder(text: str) -> bool:
-    return text.lstrip().startswith("<system-reminder>")
+def _is_system_noise(text: str) -> bool:
+    """Detect system-injected content that shouldn't appear in conversation view."""
+    s = text.lstrip()
+    return (
+        s.startswith("<system-reminder>")
+        or s.startswith("<local-command-caveat>")
+        or s.startswith("$begin plugin")
+        or s.startswith("(no content)")
+    )
 
 
 def _is_user_text_message(content) -> bool:
     """Return True if a user message has real text (not just tool_results)."""
     if isinstance(content, str):
-        return bool(content.strip()) and not _is_system_reminder(content)
+        return bool(content.strip()) and not _is_system_noise(content)
     for block in _get_content_blocks(content):
         if block.get("type") == "text":
             text = block.get("text", "").strip()
-            if text and not _is_system_reminder(text):
+            if text and not _is_system_noise(text):
                 return True
     return False
 
@@ -157,7 +164,12 @@ _CMD_PATH_PATTERNS = [
 
 
 def _path_to_repo(path: str) -> str | None:
-    """Map a file/directory path to a repo name."""
+    """Map a file/directory path to a repo name.
+
+    Only matches known repo locations — does NOT guess from arbitrary paths.
+    Worktree paths (e.g., massivebackend-mass-650-feature) are normalized
+    to the base repo name by stripping the branch suffix.
+    """
     if not path:
         return None
 
@@ -167,7 +179,10 @@ def _path_to_repo(path: str) -> str | None:
     for pat in _REPO_PATH_PATTERNS:
         m = pat.search(expanded)
         if m:
-            return m.group(1)
+            raw = m.group(1)
+            # Normalize worktree names and filter to known repos only
+            normalized = _normalize_worktree_name(raw)
+            return normalized if normalized in _KNOWN_REPOS else None
 
     if "/dev/hq/" in expanded or expanded.rstrip("/").endswith("/dev/hq"):
         return "hq"
@@ -175,20 +190,49 @@ def _path_to_repo(path: str) -> str | None:
     if "/.claude/" in expanded:
         return "claude-config"
 
-    # Try to extract a meaningful segment for other paths under home
+    # Paths under ~/dev/ but not in known subdirs (magicinternet/, fun/, hq)
     home = os.path.expanduser("~")
-    if expanded.startswith(home):
-        rel = expanded[len(home):].strip("/")
+    dev_prefix = os.path.join(home, "dev")
+    if expanded.startswith(dev_prefix):
+        rel = expanded[len(dev_prefix):].strip("/")
         parts = rel.split("/")
-        # Skip hidden dirs and common prefixes
-        for part in parts:
-            if part.startswith("."):
-                continue
-            if part in ("dev", "Users", "tmp", "var", "Library"):
-                continue
-            return part
+        # ~/dev/<org>/<repo> pattern (e.g., ~/dev/magicinternet/<new-repo>)
+        if len(parts) >= 2 and parts[0] not in ("hq", "fun", "magicinternet"):
+            return parts[1] if parts[1] in _KNOWN_REPOS else None
 
+    # Don't guess — only return repos from known locations
     return None
+
+
+# Known repo base names (used to strip worktree branch suffixes)
+_KNOWN_REPOS = {
+    "massiveproxy", "massivebackend", "infrastructure", "massivepk",
+    "partners-portal", "massivedevelopers", "massive-website", "massivesdk",
+    "massivenode", "massive-manifests", "massive-chrome-extension",
+    "massive-ios", "massive-android", "massive-firefox", "massive-edge",
+    "massive-opera", "massiveaction", "work-stuff",
+    "amionline", "claude-usage", "memory-film", "skill-guard", "agent-retro",
+    "gomarkov", "gosh", "openqasm-rs", "tiktoken-go", "wasm-game-of-life",
+    "session-browser", "alerts-triage", "clawpod-developers",
+}
+
+
+def _normalize_worktree_name(name: str) -> str:
+    """Normalize worktree directory names to base repo name.
+
+    E.g., "massivebackend-deploy-staging" -> "massivebackend"
+         "infrastructure-mass-683" -> "infrastructure"
+         "partners-portal" -> "partners-portal" (exact match)
+    """
+    if name in _KNOWN_REPOS:
+        return name
+    # Try progressively shorter prefixes
+    parts = name.split("-")
+    for i in range(len(parts), 0, -1):
+        candidate = "-".join(parts[:i])
+        if candidate in _KNOWN_REPOS:
+            return candidate
+    return name
 
 
 def _collect_repos(file_paths: set[str], bash_commands: list[str]) -> list[str]:
@@ -412,7 +456,7 @@ def extract_index_metadata(path: str) -> dict:
             text = text.strip()
 
             # Skip tool_result-only messages and system reminders
-            if text and not _is_system_reminder(text):
+            if text and not _is_system_noise(text):
                 # First prompt
                 if first_prompt is None and _is_user_text_message(content):
                     first_prompt = text[:200]
@@ -582,7 +626,7 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
             # Check if this is a real user text message (not just tool_results)
             if isinstance(content, str):
                 text = content.strip()
-                if text and not _is_system_reminder(text):
+                if text and not _is_system_noise(text):
                     if first_prompt is None:
                         first_prompt = text[:200]
                     search_text_parts.append(text)
@@ -661,6 +705,7 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
                             "result": None,
                             "tool_use_id": tool_use_id,
                             "subagent_id": None,
+                            "_timestamp": ts,
                         }
                         blk_idx = len(last["blocks"])
                         last["blocks"].append(tool_block)
@@ -712,6 +757,7 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
                             "result": None,
                             "tool_use_id": tool_use_id,
                             "subagent_id": None,
+                            "_timestamp": ts,
                         }
                         blk_idx = len(conv_entry["blocks"])
                         conv_entry["blocks"].append(tool_block)
@@ -778,6 +824,12 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
         subagents_list = _build_subagents_list(subagents_dir)
         _match_subagents_to_conversation(conversation, subagents_list, subagents_dir)
 
+    # Strip internal _timestamp from tool_use blocks
+    for entry in conversation:
+        if entry["type"] == "assistant":
+            for block in entry.get("blocks", []):
+                block.pop("_timestamp", None)
+
     return {
         "session": session_meta,
         "conversation": conversation,
@@ -839,7 +891,9 @@ def _match_subagents_to_conversation(
             continue
         for blk_idx, block in enumerate(entry.get("blocks", [])):
             if block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task"):
-                dispatch_time = parse_ts(entry.get("timestamp"))
+                # Use per-block timestamp if available, fall back to entry timestamp
+                block_ts = block.get("_timestamp") or entry.get("timestamp")
+                dispatch_time = parse_ts(block_ts)
                 agent_blocks.append((conv_idx, blk_idx, dispatch_time))
 
     # Match by timestamp proximity

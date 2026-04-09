@@ -277,41 +277,24 @@
     });
     bar.appendChild(searchInput);
 
-    // Project dropdown
-    const projectSelect = ce('select', {
-      className: 'filter-select',
-      onChange: (e) => {
-        currentFilters.project = e.target.value;
-        currentFilters.offset = 0;
-        pushFilters(currentFilters);
-        loadList();
-      },
-    });
-    projectSelect.appendChild(ce('option', { value: '', textContent: 'All projects' }));
-    for (const p of availableFilters.projects || []) {
-      const opt = ce('option', { value: p, textContent: p });
-      if (p === currentFilters.project) opt.selected = true;
-      projectSelect.appendChild(opt);
-    }
-    bar.appendChild(projectSelect);
-
-    // Repo dropdown
-    const repoSelect = ce('select', {
+    // Workspace dropdown (merged projects + repos)
+    const workspaceSelect = ce('select', {
       className: 'filter-select',
       onChange: (e) => {
         currentFilters.repo = e.target.value;
+        currentFilters.project = '';
         currentFilters.offset = 0;
         pushFilters(currentFilters);
         loadList();
       },
     });
-    repoSelect.appendChild(ce('option', { value: '', textContent: 'All repos' }));
+    workspaceSelect.appendChild(ce('option', { value: '', textContent: 'All workspaces' }));
     for (const r of availableFilters.repos || []) {
       const opt = ce('option', { value: r, textContent: r });
       if (r === currentFilters.repo) opt.selected = true;
-      repoSelect.appendChild(opt);
+      workspaceSelect.appendChild(opt);
     }
-    bar.appendChild(repoSelect);
+    bar.appendChild(workspaceSelect);
 
     // Date presets
     const dateGroup = ce('div', { className: 'date-presets' });
