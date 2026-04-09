@@ -14,9 +14,8 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 import db
 import indexer
@@ -29,7 +28,6 @@ import parser as session_parser
 _HERE = Path(__file__).parent
 _DB_DIR = Path.home() / ".cache" / "session-browser"
 _DB_PATH = str(_DB_DIR / "sessions.db")
-_TEMPLATES_DIR = str(_HERE / "templates")
 _STATIC_DIR = str(_HERE / "static")
 
 # ---------------------------------------------------------------------------
@@ -77,7 +75,7 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+_INDEX_HTML = (_HERE / "templates" / "index.html").read_text()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,9 +100,9 @@ def _maybe_reindex(request: Request) -> None:
 
 
 @app.get("/")
-async def index(request: Request):
+async def index():
     """Serve the HTML shell."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return HTMLResponse(_INDEX_HTML)
 
 
 @app.get("/api/sessions")
