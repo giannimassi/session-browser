@@ -68,6 +68,12 @@
     return `hsl(${hue}, 55%, 42%)`;
   }
 
+  /** Strip XML/HTML tags and collapse whitespace — cleans up command markup in prompts */
+  function stripTags(str) {
+    if (!str) return '';
+    return str.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
   function formatDuration(seconds) {
     if (seconds == null || seconds <= 0) return '--';
     const h = Math.floor(seconds / 3600);
@@ -412,8 +418,8 @@
         tr.appendChild(
           ce('td', {
             className: 'col-prompt',
-            textContent: truncate(s.first_prompt, 120),
-            title: s.first_prompt || '',
+            textContent: truncate(stripTags(s.first_prompt), 120),
+            title: stripTags(s.first_prompt) || '',
           })
         );
 
