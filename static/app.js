@@ -68,9 +68,21 @@
     return `hsl(${hue}, 55%, 42%)`;
   }
 
-  /** Strip XML/HTML tags and collapse whitespace — cleans up command markup in prompts */
-  function stripTags(str) {
+  /** Clean command markup from prompts.
+   *  Input like: <command-message>brief</command-message>\n<command-name>/brief</command-name>\n<command-args>I had two meetings</command-args>
+   *  Output: /brief I had two meetings
+   */
+  function cleanPrompt(str) {
     if (!str) return '';
+    // Detect command-message XML pattern
+    const nameMatch = str.match(/<command-name>\s*(\/[^<]+?)\s*<\/command-name>/);
+    if (nameMatch) {
+      const name = nameMatch[1].trim();
+      const argsMatch = str.match(/<command-args>\s*([\s\S]*?)\s*<\/command-args>/);
+      const args = argsMatch ? argsMatch[1].trim() : '';
+      return args ? `${name} ${args}` : name;
+    }
+    // Fallback: strip any remaining XML tags
     return str.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
@@ -418,8 +430,8 @@
         tr.appendChild(
           ce('td', {
             className: 'col-prompt',
-            textContent: truncate(stripTags(s.first_prompt), 120),
-            title: stripTags(s.first_prompt) || '',
+            textContent: truncate(cleanPrompt(s.first_prompt), 120),
+            title: cleanPrompt(s.first_prompt) || '',
           })
         );
 
