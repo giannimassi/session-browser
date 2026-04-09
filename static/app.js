@@ -632,8 +632,9 @@
 
       const sizeBytes = block.result.size_bytes || resultText.length;
       const lines = resultText.split('\n');
+      const isSkill = block.name === 'Skill';
 
-      if (sizeBytes < 2000 || lines.length <= 50) {
+      if (!isSkill && (sizeBytes < 2000 || lines.length <= 50)) {
         const pre = ce('pre', { className: 'tool-result-content mono' });
         pre.appendChild(ce('code', { textContent: resultText }));
         resultDiv.appendChild(pre);

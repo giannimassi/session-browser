@@ -298,7 +298,7 @@ body {
 
 .session-table thead {
   position: sticky;
-  top: 56px; /* header height */
+  top: 42px; /* header height */
   z-index: 10;
 }
 
@@ -359,6 +359,12 @@ body {
 
 .col-repos {
   width: 180px;
+  max-width: 220px;
+  line-height: 1.8;
+}
+
+.col-repos .repo-pill {
+  vertical-align: middle;
 }
 
 .col-prompt {
