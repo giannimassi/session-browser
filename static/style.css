@@ -121,9 +121,8 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 8px 20px;
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
-  backdrop-filter: blur(8px);
 }
 
 #app-header h1 {
@@ -297,8 +296,6 @@ body {
 }
 
 .session-table thead {
-  position: sticky;
-  top: 42px; /* header height */
   z-index: 10;
 }
 
