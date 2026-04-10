@@ -176,9 +176,10 @@ def _find_git_root(path: str) -> str | None:
             return _git_root_cache[check]
         check = os.path.dirname(check)
 
-    # Walk up looking for .git
+    # Walk up looking for .git (stop before home dir — dotfiles repos aren't projects)
+    home = os.path.expanduser("~")
     current = expanded
-    while current and current != "/":
+    while current and current != "/" and current != home:
         if os.path.isdir(os.path.join(current, ".git")):
             # Cache this and all intermediate paths
             cache_path = expanded
@@ -195,8 +196,12 @@ def _find_git_root(path: str) -> str | None:
 
 
 def _path_to_repo(path: str) -> str | None:
-    """Map a file/directory path to a repo name by finding its git root.
-    Returns the basename of the git root directory, or None."""
+    """Map a file/directory path to a repo name.
+
+    First tries to find a git root on disk (fast, cached). If the path
+    no longer exists (e.g., deleted worktree from a past session), falls
+    back to heuristic extraction from the path structure.
+    """
     if not path:
         return None
 
@@ -206,30 +211,98 @@ def _path_to_repo(path: str) -> str | None:
     if "/.claude/" in expanded:
         return "claude-config"
 
+    # Try filesystem-based git root detection first
     git_root = _find_git_root(expanded)
     if git_root:
         return os.path.basename(git_root)
+
+    # Path doesn't exist on disk — extract repo name heuristically.
+    # Only match paths under common development directories.
+    home = os.path.expanduser("~")
+    if not expanded.startswith(home):
+        return None
+
+    rel = expanded[len(home):].strip("/")
+    parts = rel.split("/")
+    if len(parts) < 2:
+        return None
+
+    # Only consider paths under known dev-like top-level dirs
+    dev_roots = {"dev", "projects", "repos", "src", "code", "workspace", "go"}
+    if parts[0] not in dev_roots:
+        return None
+
+    # ~/dev/<repo>/... -> repo  OR  ~/dev/<org>/<repo>/... -> repo
+    # Take the deepest directory that's at most 3 levels under home
+    # and has siblings (i.e., it's not a leaf file)
+    if len(parts) >= 3:
+        return parts[2]  # ~/dev/org/repo
+    if len(parts) >= 2:
+        return parts[1]  # ~/dev/repo
 
     return None
 
 
 def _collect_repos(file_paths: set[str], bash_commands: list[str]) -> list[str]:
     """Derive sorted unique repo names from file paths and bash commands."""
-    repos: set[str] = set()
+    raw_repos: set[str] = set()
 
     for fp in file_paths:
         repo = _path_to_repo(fp)
         if repo:
-            repos.add(repo)
+            raw_repos.add(repo)
 
     for cmd in bash_commands:
         for pat in _CMD_PATH_PATTERNS:
             for m in pat.finditer(cmd):
                 repo = _path_to_repo(m.group(1))
                 if repo:
-                    repos.add(repo)
+                    raw_repos.add(repo)
+
+    # Normalize worktree names: worktrees are named <repo>-<branch-slug>.
+    # If a name contains a dash, check if its prefix (up to any dash)
+    # matches an existing git repo on disk. If so, use the base name.
+    repos: set[str] = set()
+    for name in raw_repos:
+        normalized = _normalize_to_base_repo(name)
+        repos.add(normalized)
+
+    # Filter out common non-repo noise
+    noise = {"$repo", "os", "src", "tmp"}
+    repos -= noise
 
     return sorted(repos)
+
+
+def _normalize_to_base_repo(name: str) -> str:
+    """If name looks like a worktree (<repo>-<branch>), find the base repo.
+
+    Checks progressively shorter dash-delimited prefixes to see if a git
+    repo with that name exists on disk (under common dev directories).
+    """
+    if "-" not in name:
+        return name
+
+    home = os.path.expanduser("~")
+    # Common places repos live — check if a shorter prefix is a real repo
+    dev_dirs = [
+        os.path.join(home, "dev"),
+    ]
+    # Also check sibling directories of known dev subdirs
+    for sub in ("magicinternet", "fun"):
+        d = os.path.join(home, "dev", sub)
+        if os.path.isdir(d):
+            dev_dirs.append(d)
+
+    parts = name.split("-")
+    # Try progressively shorter prefixes (longest first, stop before 0)
+    for i in range(len(parts) - 1, 0, -1):
+        candidate = "-".join(parts[:i])
+        for dev_dir in dev_dirs:
+            candidate_path = os.path.join(dev_dir, candidate)
+            if os.path.isdir(os.path.join(candidate_path, ".git")):
+                return candidate
+    return name
 
 
 # ---------------------------------------------------------------------------
