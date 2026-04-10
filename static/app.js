@@ -900,6 +900,24 @@
     return wrapper;
   }
 
+  function renderSkillPrompt(msg) {
+    const wrapper = ce('div', { className: 'message skill-prompt collapsed' });
+    const toggle = ce('div', { className: 'skill-prompt-toggle' });
+    toggle.textContent = '\u2699 Skill prompt (click to expand)';
+    toggle.addEventListener('click', () => {
+      wrapper.classList.toggle('collapsed');
+      toggle.textContent = wrapper.classList.contains('collapsed')
+        ? '\u2699 Skill prompt (click to expand)'
+        : '\u2699 Skill prompt (click to collapse)';
+    });
+    wrapper.appendChild(toggle);
+
+    const content = ce('div', { className: 'skill-prompt-content' });
+    content.innerHTML = marked.parse(msg.content || '');
+    wrapper.appendChild(content);
+    return wrapper;
+  }
+
   /** Render the conversation list */
   function renderConversation(conversation, sessionId) {
     const container = ce('div', { className: 'conversation' });
@@ -913,6 +931,8 @@
     for (const msg of conversation) {
       if (msg.type === 'user') {
         container.appendChild(renderUserMessage(msg));
+      } else if (msg.type === 'skill_prompt') {
+        container.appendChild(renderSkillPrompt(msg));
       } else if (msg.type === 'assistant') {
         container.appendChild(renderAssistantMessage(msg, sessionId));
       }

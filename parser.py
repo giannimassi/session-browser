@@ -618,6 +618,8 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
     conversation: list[dict] = []
     # Map tool_use_id -> (conversation_idx, block_idx) for result pairing
     pending_tool_uses: dict[str, tuple[int, int]] = {}
+    # Track if previous user message was a command-message (skill invocation)
+    _prev_was_command = False
 
     for rec in stream_jsonl(path):
         # Session metadata
@@ -675,9 +677,16 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
                         del pending_tool_uses[tool_use_id]
 
             # Check if this is a real user text message (not just tool_results)
+            text = ""
             if isinstance(content, str):
                 text = content.strip()
-                if text and not _is_system_noise(text):
+            elif _is_user_text_message(content):
+                text = _extract_text_from_content(content).strip()
+
+            if text and not _is_system_noise(text):
+                # Detect command-message (skill invocation trigger)
+                if "<command-message>" in text:
+                    _prev_was_command = True
                     if first_prompt is None:
                         first_prompt = text[:200]
                     search_text_parts.append(text)
@@ -686,9 +695,17 @@ def extract_session_detail(path: str, subagents_dir: str | None = None) -> dict:
                         "timestamp": ts,
                         "content": text,
                     })
-            elif _is_user_text_message(content):
-                text = _extract_text_from_content(content).strip()
-                if text:
+                elif _prev_was_command:
+                    # This is the skill prompt content — mark it as collapsible
+                    _prev_was_command = False
+                    search_text_parts.append(text)
+                    conversation.append({
+                        "type": "skill_prompt",
+                        "timestamp": ts,
+                        "content": text,
+                    })
+                else:
+                    _prev_was_command = False
                     if first_prompt is None:
                         first_prompt = text[:200]
                     search_text_parts.append(text)
