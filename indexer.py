@@ -9,7 +9,6 @@ re-parsed unless force=True.
 import json
 import logging
 import os
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,80 +22,33 @@ logger = logging.getLogger(__name__)
 # Project name derivation
 # ---------------------------------------------------------------------------
 
-# Matches encoded CWD format (slashes replaced with dashes) used in
-# ~/.claude/projects/ directory names.
-_ENCODED_PATTERNS = [
-    # -Users-<user>-dev-magicinternet-<name>-...
-    re.compile(r"-Users-[^-]+-dev-magicinternet-([^-]+)"),
-    # -Users-<user>-dev-fun-<name>-...
-    re.compile(r"-Users-[^-]+-dev-fun-([^-]+)"),
-    # -Users-<user>-dev-hq or -Users-<user>-dev-hq-...
-    re.compile(r"-Users-[^-]+-dev-hq(?:-|$)"),
-    # -Users-<user>-.claude-...
-    re.compile(r"-Users-[^-]+-\.claude(?:-|$)"),
-]
-
 
 def derive_project_name(cwd: str) -> str:
     """Derive a friendly project name from a CWD path.
 
-    Handles both real paths (/Users/x/dev/fun/foo) and the encoded-CWD format
-    used by Claude Code for project directory names (slashes replaced with dashes).
+    Uses the last meaningful segment of the path. For real paths like
+    /Users/x/dev/myproject, returns "myproject". For encoded-CWD paths
+    like -Users-x-dev-myproject (used by Claude Code), decodes and does
+    the same.
     """
     if not cwd:
         return "unknown"
 
-    # --- Try real path patterns first ---
     expanded = os.path.expanduser(cwd)
 
-    # /Users/*/dev/magicinternet/<name>/...
-    m = re.search(r"/dev/magicinternet/([^/]+)", expanded)
-    if m:
-        return m.group(1)
-
-    # /Users/*/dev/fun/<name>/...
-    m = re.search(r"/dev/fun/([^/]+)", expanded)
-    if m:
-        return m.group(1)
-
-    # /Users/*/dev/hq or /Users/*/dev/hq/...
-    if "/dev/hq" in expanded:
-        return "hq"
-
-    # /Users/*/.claude/...
-    if "/.claude/" in expanded or expanded.rstrip("/").endswith("/.claude"):
-        return "claude-config"
-
-    # --- Try encoded-CWD patterns (dashes instead of slashes) ---
-    if re.search(r"-Users-[^-]+-dev-magicinternet-([^-]+)", cwd):
-        return re.search(r"-Users-[^-]+-dev-magicinternet-([^-]+)", cwd).group(1)
-
-    if re.search(r"-Users-[^-]+-dev-fun-([^-]+)", cwd):
-        return re.search(r"-Users-[^-]+-dev-fun-([^-]+)", cwd).group(1)
-
-    if re.search(r"-Users-[^-]+-dev-hq(?:-|$)", cwd):
-        return "hq"
-
-    if re.search(r"-Users-[^-]+-\.claude(?:-|$)", cwd):
-        return "claude-config"
-
-    # --- Fallback: last meaningful path segment ---
-    # For real paths
+    # Real path — use basename, or parent basename if it's a hidden dir
     if "/" in expanded:
-        parts = Path(expanded).parts
-        # Walk from the end, skip empty and common non-informative segments
-        skip = {"", "/", "Users", "dev", "tmp", "var", "Library", "home"}
-        for part in reversed(parts):
-            if part not in skip and not part.startswith("."):
-                return part
+        p = Path(expanded).resolve() if os.path.exists(expanded) else Path(expanded)
+        name = p.name
+        if name.startswith("."):
+            return p.parent.name or "unknown"
+        return name or "unknown"
 
-    # For encoded paths (dash-separated)
+    # Encoded CWD (dashes instead of slashes): -Users-x-dev-myproject
     if cwd.startswith("-"):
-        parts = cwd.strip("-").split("-")
-        skip = {"Users", "dev", "tmp", "var", "Library", "home"}
-        for part in reversed(parts):
-            if part and part not in skip and not part.startswith("."):
-                return part
+        parts = [p for p in cwd.strip("-").split("-") if p]
+        if parts:
+            return parts[-1]
 
     return "unknown"
 

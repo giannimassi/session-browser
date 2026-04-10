@@ -146,13 +146,6 @@ def _is_user_text_message(content) -> bool:
 # Repo derivation from file paths
 # ---------------------------------------------------------------------------
 
-_REPO_PATH_PATTERNS = [
-    # /dev/magicinternet/<name>/...
-    re.compile(r"/dev/magicinternet/([^/]+)"),
-    # /dev/fun/<name>/...
-    re.compile(r"/dev/fun/([^/]+)"),
-]
-
 _CMD_PATH_PATTERNS = [
     # git -C <path>, go -C <path>, make -C <path>
     re.compile(r"(?:git|go|make)\s+-C\s+([^\s;|&]+)"),
@@ -162,77 +155,62 @@ _CMD_PATH_PATTERNS = [
     re.compile(r"terraform\s+-chdir=([^\s;|&]+)"),
 ]
 
+# Cache of path -> git root lookups (populated lazily)
+_git_root_cache: dict[str, str | None] = {}
 
-def _path_to_repo(path: str) -> str | None:
-    """Map a file/directory path to a repo name.
 
-    Only matches known repo locations — does NOT guess from arbitrary paths.
-    Worktree paths (e.g., massivebackend-mass-650-feature) are normalized
-    to the base repo name by stripping the branch suffix.
-    """
-    if not path:
-        return None
-
-    # Expand ~ for matching
+def _find_git_root(path: str) -> str | None:
+    """Walk up from path to find the nearest .git directory.
+    Returns the repo root directory, or None if not in a git repo.
+    Uses a cache to avoid repeated filesystem walks."""
     expanded = os.path.expanduser(path)
 
-    for pat in _REPO_PATH_PATTERNS:
-        m = pat.search(expanded)
-        if m:
-            raw = m.group(1)
-            # Normalize worktree names and filter to known repos only
-            normalized = _normalize_worktree_name(raw)
-            return normalized if normalized in _KNOWN_REPOS else None
+    # If it's a file, start from its parent
+    if not os.path.isdir(expanded):
+        expanded = os.path.dirname(expanded)
 
-    if "/dev/hq/" in expanded or expanded.rstrip("/").endswith("/dev/hq"):
-        return "hq"
+    # Check cache for this path or any parent
+    check = expanded
+    while check and check != "/":
+        if check in _git_root_cache:
+            return _git_root_cache[check]
+        check = os.path.dirname(check)
 
-    if "/.claude/" in expanded:
-        return "claude-config"
+    # Walk up looking for .git
+    current = expanded
+    while current and current != "/":
+        if os.path.isdir(os.path.join(current, ".git")):
+            # Cache this and all intermediate paths
+            cache_path = expanded
+            while cache_path != current and cache_path != "/":
+                _git_root_cache[cache_path] = current
+                cache_path = os.path.dirname(cache_path)
+            _git_root_cache[current] = current
+            return current
+        current = os.path.dirname(current)
 
-    # Paths under ~/dev/ but not in known subdirs (magicinternet/, fun/, hq)
-    home = os.path.expanduser("~")
-    dev_prefix = os.path.join(home, "dev")
-    if expanded.startswith(dev_prefix):
-        rel = expanded[len(dev_prefix):].strip("/")
-        parts = rel.split("/")
-        # ~/dev/<org>/<repo> pattern (e.g., ~/dev/magicinternet/<new-repo>)
-        if len(parts) >= 2 and parts[0] not in ("hq", "fun", "magicinternet"):
-            return parts[1] if parts[1] in _KNOWN_REPOS else None
-
-    # Don't guess — only return repos from known locations
+    # No git root found — cache the miss
+    _git_root_cache[expanded] = None
     return None
 
 
-# Known repo base names (used to strip worktree branch suffixes)
-_KNOWN_REPOS = {
-    "massiveproxy", "massivebackend", "infrastructure", "massivepk",
-    "partners-portal", "massivedevelopers", "massive-website", "massivesdk",
-    "massivenode", "massive-manifests", "massive-chrome-extension",
-    "massive-ios", "massive-android", "massive-firefox", "massive-edge",
-    "massive-opera", "massiveaction", "work-stuff",
-    "amionline", "claude-usage", "memory-film", "skill-guard", "agent-retro",
-    "gomarkov", "gosh", "openqasm-rs", "tiktoken-go", "wasm-game-of-life",
-    "session-browser", "alerts-triage", "clawpod-developers",
-}
+def _path_to_repo(path: str) -> str | None:
+    """Map a file/directory path to a repo name by finding its git root.
+    Returns the basename of the git root directory, or None."""
+    if not path:
+        return None
 
+    expanded = os.path.expanduser(path)
 
-def _normalize_worktree_name(name: str) -> str:
-    """Normalize worktree directory names to base repo name.
+    # Skip paths inside ~/.claude — label as "claude-config"
+    if "/.claude/" in expanded:
+        return "claude-config"
 
-    E.g., "massivebackend-deploy-staging" -> "massivebackend"
-         "infrastructure-mass-683" -> "infrastructure"
-         "partners-portal" -> "partners-portal" (exact match)
-    """
-    if name in _KNOWN_REPOS:
-        return name
-    # Try progressively shorter prefixes
-    parts = name.split("-")
-    for i in range(len(parts), 0, -1):
-        candidate = "-".join(parts[:i])
-        if candidate in _KNOWN_REPOS:
-            return candidate
-    return name
+    git_root = _find_git_root(expanded)
+    if git_root:
+        return os.path.basename(git_root)
+
+    return None
 
 
 def _collect_repos(file_paths: set[str], bash_commands: list[str]) -> list[str]:
