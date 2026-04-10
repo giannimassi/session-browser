@@ -12,6 +12,9 @@
   let availableFilters = { projects: [], repos: [], branches: [] };
   let scannedAt = null;
 
+  // Cost display mode: "usd" | "tokens"
+  let costMode = localStorage.getItem('sb-cost-mode') || 'usd';
+
   const defaults = {
     q: '',
     project: '',
@@ -58,14 +61,33 @@
     return el;
   }
 
-  /** Deterministic color from string hash — returns hsl string */
+  // ---------------------------------------------------------------------------
+  // Tag color palette
+  // ---------------------------------------------------------------------------
+
+  const TAG_COLORS = [
+    '#6366f1', // indigo
+    '#8b5cf6', // violet
+    '#ec4899', // pink
+    '#f43f5e', // rose
+    '#ef4444', // red
+    '#f97316', // orange
+    '#eab308', // yellow
+    '#22c55e', // green
+    '#14b8a6', // teal
+    '#06b6d4', // cyan
+    '#3b82f6', // blue
+    '#a855f7', // purple
+  ];
+
+  /** Deterministic color from string hash — returns hex from curated palette */
   function colorFromString(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       hash = str.charCodeAt(i) + ((hash << 5) - hash);
     }
-    const hue = ((hash % 360) + 360) % 360;
-    return `hsl(${hue}, 55%, 42%)`;
+    const idx = ((hash % TAG_COLORS.length) + TAG_COLORS.length) % TAG_COLORS.length;
+    return TAG_COLORS[idx];
   }
 
   /** Clean command markup from prompts.
@@ -98,6 +120,57 @@
   function formatCost(usd) {
     if (usd == null) return '--';
     return `$${Number(usd).toFixed(2)}`;
+  }
+
+  /** Parse total tokens from a token_usage JSON string field */
+  function totalTokens(tokenUsageStr) {
+    const tu = safeParse(tokenUsageStr);
+    if (!tu) return null;
+    return (
+      (tu.input_tokens || 0) +
+      (tu.output_tokens || 0) +
+      (tu.cache_creation_input_tokens || 0) +
+      (tu.cache_read_input_tokens || 0)
+    );
+  }
+
+  /** Format token count: 1.2M, 450K, or raw number */
+  function formatTokens(n) {
+    if (n == null) return '--';
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+    return String(n);
+  }
+
+  /** Format cost or tokens based on current costMode */
+  function formatCostOrTokens(session) {
+    if (costMode === 'tokens') {
+      const t = totalTokens(session.token_usage);
+      return formatTokens(t);
+    }
+    return formatCost(session.estimated_cost_usd);
+  }
+
+  /** Compute aggregate cost or tokens for current sessions array */
+  function computePageAggregate() {
+    if (costMode === 'tokens') {
+      let total = 0;
+      let missing = false;
+      for (const s of sessions) {
+        const t = totalTokens(s.token_usage);
+        if (t == null) { missing = true; continue; }
+        total += t;
+      }
+      return { value: formatTokens(total || null), missing };
+    }
+    let total = 0;
+    let missing = false;
+    for (const s of sessions) {
+      const c = s.estimated_cost_usd;
+      if (c == null) { missing = true; continue; }
+      total += Number(c);
+    }
+    return { value: `$${total.toFixed(2)}`, missing };
   }
 
   function formatDate(isoStr) {
@@ -144,6 +217,60 @@
     if (!str) return '';
     if (str.length <= len) return str;
     return str.slice(0, len) + '...';
+  }
+
+  /** Build the claude --resume command for a session */
+  function resumeCommand(session) {
+    const cwd = session.project_cwd || '';
+    return `claude --resume ${session.session_id}${cwd ? ` --cwd ${cwd}` : ''}`;
+  }
+
+  /** Copy text to clipboard and show a "Copied!" tooltip on the button */
+  function copyWithFeedback(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.classList.add('copy-btn--copied');
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove('copy-btn--copied');
+      }, 1500);
+    });
+  }
+
+  /** Open the command in Ghostty via URL scheme, fall back to copy */
+  function openInGhostty(session) {
+    const cmd = resumeCommand(session);
+    const cwd = session.project_cwd || '';
+    const url = `ghostty:///action/new_tab?command=${encodeURIComponent(cmd)}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`;
+    window.open(url, '_blank');
+  }
+
+  /** Create a resume copy button (and optionally the Ghostty button) for list rows */
+  function makeResumeCopyBtn(session) {
+    const btn = ce('button', {
+      className: 'resume-btn',
+      title: 'Copy resume command',
+      textContent: '\u29C9',
+      onClick: (e) => {
+        e.stopPropagation();
+        copyWithFeedback(btn, resumeCommand(session));
+      },
+    });
+    return btn;
+  }
+
+  function makeGhosttyBtn(session) {
+    const btn = ce('button', {
+      className: 'resume-btn ghostty-btn',
+      title: 'Open in Ghostty',
+      textContent: '\u276F_',
+      onClick: (e) => {
+        e.stopPropagation();
+        openInGhostty(session);
+      },
+    });
+    return btn;
   }
 
   // ---------------------------------------------------------------------------
@@ -323,6 +450,19 @@
     }
     bar.appendChild(dateGroup);
 
+    // Cost mode toggle ($ / Tk)
+    const costToggle = ce('button', {
+      className: `cost-mode-toggle${costMode === 'tokens' ? ' active' : ''}`,
+      title: costMode === 'tokens' ? 'Switch to dollar amounts' : 'Switch to token counts',
+      textContent: '$ / Tk',
+      onClick: () => {
+        costMode = costMode === 'usd' ? 'tokens' : 'usd';
+        localStorage.setItem('sb-cost-mode', costMode);
+        renderList();
+      },
+    });
+    bar.appendChild(costToggle);
+
     // Total count
     const countEl = ce('span', {
       className: 'session-count',
@@ -331,6 +471,20 @@
     bar.appendChild(countEl);
 
     container.appendChild(bar);
+
+    // Cost aggregate summary line
+    if (sessions.length > 0) {
+      const agg = computePageAggregate();
+      const from = currentFilters.offset + 1;
+      const to = Math.min(currentFilters.offset + currentFilters.limit, totalCount);
+      const isPartial = sessions.length < totalCount;
+      const aggText = isPartial
+        ? `Page total: ${agg.value} (showing ${from}-${to} of ${totalCount})`
+        : `Total: ${agg.value} across ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`;
+
+      const aggLine = ce('div', { className: 'cost-aggregate', textContent: aggText });
+      container.appendChild(aggLine);
+    }
   }
 
   function sortIndicator(col) {
@@ -357,14 +511,16 @@
     const thead = ce('thead');
     const headerRow = ce('tr');
 
+    const costLabel = costMode === 'tokens' ? 'Tokens' : 'Cost';
     const columns = [
       { key: 'start_time', label: 'Date', sortable: true },
       { key: 'repos', label: 'Repos', sortable: false },
       { key: 'first_prompt', label: 'First Prompt', sortable: false },
       { key: 'git_branch', label: 'Branch', sortable: true },
       { key: 'duration_seconds', label: 'Duration', sortable: true },
-      { key: 'estimated_cost_usd', label: 'Cost', sortable: true },
+      { key: 'estimated_cost_usd', label: costLabel, sortable: true },
       { key: 'turn_count', label: 'Turns', sortable: true },
+      { key: '_resume', label: '', sortable: false },
     ];
 
     for (const col of columns) {
@@ -384,7 +540,7 @@
     const tbody = ce('tbody');
     if (sessions.length === 0) {
       const tr = ce('tr');
-      tr.appendChild(ce('td', { colSpan: '7', className: 'empty-state', textContent: 'No sessions found' }));
+      tr.appendChild(ce('td', { colSpan: '8', className: 'empty-state', textContent: 'No sessions found' }));
       tbody.appendChild(tr);
     } else {
       for (const s of sessions) {
@@ -424,11 +580,19 @@
         // Duration
         tr.appendChild(ce('td', { className: 'col-duration', textContent: formatDuration(s.duration_seconds) }));
 
-        // Cost
-        tr.appendChild(ce('td', { className: 'col-cost', textContent: formatCost(s.estimated_cost_usd) }));
+        // Cost / Tokens
+        tr.appendChild(ce('td', { className: 'col-cost', textContent: formatCostOrTokens(s) }));
 
         // Turns
         tr.appendChild(ce('td', { className: 'col-turns', textContent: s.turn_count ?? '--' }));
+
+        // Resume buttons
+        const resumeCell = ce('td', { className: 'col-resume' });
+        const resumeBtns = ce('div', { className: 'resume-btn-group' });
+        resumeBtns.appendChild(makeResumeCopyBtn(s));
+        resumeBtns.appendChild(makeGhosttyBtn(s));
+        resumeCell.appendChild(resumeBtns);
+        tr.appendChild(resumeCell);
 
         tbody.appendChild(tr);
       }
@@ -819,13 +983,39 @@
       );
     }
 
-    // Cost
+    // Cost / Tokens
+    const costLabelDetail = costMode === 'tokens' ? 'Tokens' : 'Cost';
+    const costValDetail = formatCostOrTokens(session);
     header.appendChild(
       ce('div', { className: 'detail-meta-item' }, [
-        ce('span', { className: 'meta-label', textContent: 'Cost' }),
-        ce('span', { className: 'meta-value', textContent: formatCost(session.estimated_cost_usd) }),
+        ce('span', { className: 'meta-label', textContent: costLabelDetail }),
+        ce('span', { className: 'meta-value', textContent: costValDetail }),
       ])
     );
+
+    // Resume buttons
+    const resumeGroup = ce('div', { className: 'detail-meta-item detail-resume-group' });
+    resumeGroup.appendChild(ce('span', { className: 'meta-label', textContent: 'Resume' }));
+    const resumeBtns = ce('div', { className: 'resume-btn-group' });
+
+    const copyBtn = ce('button', {
+      className: 'resume-btn resume-btn--detail',
+      title: `Copy: ${resumeCommand(session)}`,
+      textContent: '\u29C9 Copy command',
+      onClick: () => copyWithFeedback(copyBtn, resumeCommand(session)),
+    });
+    resumeBtns.appendChild(copyBtn);
+
+    const ghosttyBtn = ce('button', {
+      className: 'resume-btn ghostty-btn resume-btn--detail',
+      title: 'Open in Ghostty',
+      textContent: '\u276F_ Ghostty',
+      onClick: () => openInGhostty(session),
+    });
+    resumeBtns.appendChild(ghosttyBtn);
+
+    resumeGroup.appendChild(resumeBtns);
+    header.appendChild(resumeGroup);
 
     // Tool summary
     const toolStr = buildToolSummary(session);

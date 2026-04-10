@@ -417,6 +417,110 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
+   Cost Mode Toggle
+   --------------------------------------------------------------------------- */
+
+.cost-mode-toggle {
+  padding: 5px 10px;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.cost-mode-toggle:hover {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
+
+.cost-mode-toggle.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+   Cost Aggregate Line
+   --------------------------------------------------------------------------- */
+
+.cost-aggregate {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 12px;
+  margin-bottom: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Resume Buttons
+   --------------------------------------------------------------------------- */
+
+.col-resume {
+  width: 64px;
+  text-align: right;
+  white-space: nowrap;
+  padding-right: 8px !important;
+}
+
+.resume-btn-group {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.resume-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 7px;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-row:hover .resume-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.resume-btn:hover {
+  background: var(--btn-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.resume-btn--copied,
+.resume-btn.copy-btn--copied {
+  color: #22c55e !important;
+  border-color: #22c55e !important;
+}
+
+/* Detail view resume buttons — always visible */
+.resume-btn--detail {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+.detail-resume-group .resume-btn-group {
+  margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------------------
    Repo Pills
    --------------------------------------------------------------------------- */
 
@@ -426,10 +530,15 @@ body {
   margin: 2px 4px 2px 0;
   border-radius: 12px;
   font-size: 11px;
-  font-weight: 500;
-  color: var(--pill-text);
+  font-weight: 600;
+  color: #ffffff;
   white-space: nowrap;
   line-height: 1.6;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .repo-pill {
+  filter: brightness(0.88) saturate(1.1);
 }
 
 /* ---------------------------------------------------------------------------
