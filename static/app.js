@@ -238,15 +238,7 @@
     });
   }
 
-  /** Open the command in Ghostty via URL scheme, fall back to copy */
-  function openInGhostty(session) {
-    const cmd = resumeCommand(session);
-    const cwd = session.project_cwd || '';
-    const url = `ghostty:///action/new_tab?command=${encodeURIComponent(cmd)}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`;
-    window.open(url, '_blank');
-  }
-
-  /** Create a resume copy button (and optionally the Ghostty button) for list rows */
+  /** Create a resume copy button for list rows */
   function makeResumeCopyBtn(session) {
     const btn = ce('button', {
       className: 'resume-btn',
@@ -255,19 +247,6 @@
       onClick: (e) => {
         e.stopPropagation();
         copyWithFeedback(btn, resumeCommand(session));
-      },
-    });
-    return btn;
-  }
-
-  function makeGhosttyBtn(session) {
-    const btn = ce('button', {
-      className: 'resume-btn ghostty-btn',
-      title: 'Open in Ghostty',
-      textContent: '\u276F_',
-      onClick: (e) => {
-        e.stopPropagation();
-        openInGhostty(session);
       },
     });
     return btn;
@@ -590,7 +569,6 @@
         const resumeCell = ce('td', { className: 'col-resume' });
         const resumeBtns = ce('div', { className: 'resume-btn-group' });
         resumeBtns.appendChild(makeResumeCopyBtn(s));
-        resumeBtns.appendChild(makeGhosttyBtn(s));
         resumeCell.appendChild(resumeBtns);
         tr.appendChild(resumeCell);
 
@@ -1005,14 +983,6 @@
       onClick: () => copyWithFeedback(copyBtn, resumeCommand(session)),
     });
     resumeBtns.appendChild(copyBtn);
-
-    const ghosttyBtn = ce('button', {
-      className: 'resume-btn ghostty-btn resume-btn--detail',
-      title: 'Open in Ghostty',
-      textContent: '\u276F_ Ghostty',
-      onClick: () => openInGhostty(session),
-    });
-    resumeBtns.appendChild(ghosttyBtn);
 
     resumeGroup.appendChild(resumeBtns);
     header.appendChild(resumeGroup);
